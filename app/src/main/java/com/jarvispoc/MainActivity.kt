@@ -37,6 +37,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -631,6 +634,70 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                     "Use a throwaway account. Instagram bans accounts it detects as automated.",
                     fontSize = 12.sp,
                     color = Color(0xFFFF8A65),
+                )
+            }
+        }
+
+        // ------------------------------------------------------------- telegram
+        item {
+            SectionCard("3 · Telegram Auto-Reply MVP") {
+                Text(
+                    "Automatically reply to incoming Telegram messages. Requires Notification Listener access.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                
+                Button(onClick = {
+                    val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                    context.startActivity(intent)
+                }) {
+                    Text("Grant Notification Access")
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                var expanded by remember { mutableStateOf(false) }
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Current Mode: ")
+                    TextButton(onClick = { expanded = true }) {
+                        Text(com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode.name)
+                    }
+                }
+                
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("AVAILABLE (LLM)") },
+                        onClick = { 
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.AVAILABLE 
+                            expanded = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("DRIVING") },
+                        onClick = { 
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.DRIVING 
+                            expanded = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("SLEEPING") },
+                        onClick = { 
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.SLEEPING 
+                            expanded = false
+                        }
+                    )
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Messages are processed automatically in the background when notifications arrive.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
