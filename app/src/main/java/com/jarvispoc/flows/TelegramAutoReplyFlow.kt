@@ -61,7 +61,7 @@ object TelegramAutoReplyFlow {
         AgentLog.info("Auto-replying to $sender: \"$replyText\"")
 
         // 4. Send Reply
-        val sentViaRemote = tryRemoteInput(sbn, replyText)
+        val sentViaRemote = tryRemoteInput(context, sbn, replyText)
         if (sentViaRemote) {
             AgentLog.success("Reply sent via RemoteInput")
             // 7. Verify
@@ -99,7 +99,7 @@ object TelegramAutoReplyFlow {
         }
     }
 
-    private fun tryRemoteInput(sbn: StatusBarNotification, reply: String): Boolean {
+    private fun tryRemoteInput(context: Context, sbn: StatusBarNotification, reply: String): Boolean {
         val notification = sbn.notification
         val actions = notification.actions ?: return false
 
@@ -114,7 +114,7 @@ object TelegramAutoReplyFlow {
                     RemoteInput.addResultsToIntent(remoteInputs, intent, bundle)
                     
                     try {
-                        action.actionIntent.send(null, 0, intent)
+                        action.actionIntent.send(context, 0, intent)
                         return true
                     } catch (e: PendingIntent.CanceledException) {
                         AgentLog.error("Failed to send inline reply", e)
