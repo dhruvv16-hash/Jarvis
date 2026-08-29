@@ -658,11 +658,12 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                 Spacer(Modifier.height(8.dp))
                 
                 var expanded by remember { mutableStateOf(false) }
+                var currentModeUI by remember { mutableStateOf(com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode) }
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Current Mode: ")
                     TextButton(onClick = { expanded = true }) {
-                        Text(com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode.name)
+                        Text(currentModeUI.name)
                     }
                 }
                 
@@ -673,21 +674,27 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                     DropdownMenuItem(
                         text = { Text("AVAILABLE (LLM)") },
                         onClick = { 
-                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.AVAILABLE 
+                            val mode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.AVAILABLE
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = mode 
+                            currentModeUI = mode
                             expanded = false
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("DRIVING") },
                         onClick = { 
-                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.DRIVING 
+                            val mode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.DRIVING
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = mode 
+                            currentModeUI = mode
                             expanded = false
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("SLEEPING") },
                         onClick = { 
-                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.SLEEPING 
+                            val mode = com.jarvispoc.flows.TelegramAutoReplyFlow.Mode.SLEEPING
+                            com.jarvispoc.flows.TelegramAutoReplyFlow.currentMode = mode 
+                            currentModeUI = mode
                             expanded = false
                         }
                     )
