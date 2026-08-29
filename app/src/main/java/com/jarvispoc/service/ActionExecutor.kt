@@ -362,14 +362,15 @@ class ActionExecutor(private val service: JarvisAccessibilityService) {
         return null
     }
 
-    private fun scrollForward(): Boolean {
+    private suspend fun scrollForward(): Boolean {
         val target = snapshot()
             .filter { it.scrollable }
             .maxByOrNull { it.bounds.width().toLong() * it.bounds.height().toLong() }
-            ?: return false
-        return target.raw
-            ?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-            ?: false
+        if (target != null && target.raw?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true) {
+            return true
+        }
+        // Fallback: physical swipe gesture for WebViews, Compose, and custom scrolling layouts
+        return swipe(720, 2000, 720, 700)
     }
 
     // --------------------------------------------------------- interstitials

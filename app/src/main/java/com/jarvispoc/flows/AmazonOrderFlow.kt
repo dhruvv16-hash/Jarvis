@@ -10,48 +10,29 @@ import kotlinx.coroutines.delay
 import java.net.URLEncoder
 
 /**
- * Search Amazon, add the first result to the cart, choose Cash/Pay on Delivery,
- * and walk to the final confirm screen.
+ * Search Amazon for the requested product, inspect visible search results,
+ * pick the FIRST product whose title is a reasonable match (skipping non-matching
+ * sponsored results), verify the title on the product detail page, add to cart,
+ * open the cart, and verify the item is present before reporting success.
  *
- * Two deliberate shortcuts:
- *  - Search is a deep link rather than driving the search box. Same result,
- *    three fewer steps that can fail.
- *  - The cart is reached by deep link too, instead of hunting the cart icon.
- *
- * **Payment safety.** The flow tracks whether it actually selected Cash/Pay on
- * Delivery, and independently re-verifies it on the final review screen. If it
- * cannot prove COD is the selected method it will NOT place the order, even
- * with autoConfirm on — a silent failure to select COD would otherwise fall
- * through to whatever card is saved on the account, which is exactly the
- * outcome choosing COD was meant to avoid.
- *
- * SELECTOR HEALTH WARNING: every Query below is a first guess. Run the screen
- * dumper on real Amazon screens and correct these against actual resource ids
- * before expecting a clean pass.
+ * Does not proceed to checkout or payment.
  */
 class AmazonOrderFlow(private val searchQuery: String) : Flow {
 
-    override val name: String = "Amazon COD order"
+    override val name: String = "Amazon Add to Cart"
 
     override suspend fun run(x: ActionExecutor, autoConfirm: Boolean): FlowResult {
         val pkg = PACKAGES.firstOrNull { x.isInstalled(it) }
             ?: return FlowResult.Failed("launch", "no Amazon shopping app installed")
         AgentLog.info("using Amazon package $pkg")
 
-        // A rambling mis-transcription searched verbatim returns nothing, and
-        // the flow would then blame RESULT_ITEM rather than the query.
         val query = searchQuery.trim().take(MAX_QUERY_LENGTH)
-        if (query.length < searchQuery.trim().length) {
-            AgentLog.warn("search text truncated to $MAX_QUERY_LENGTH chars: \"$query\"")
+        if (query.isBlank()) {
+            return FlowResult.Failed("search", "search query is empty")
         }
-        if (query.firstOrNull()?.isDigit() == true) {
-            AgentLog.warn(
-                "query starts with a number (\"$query\") — this flow always adds ONE " +
-                    "unit, quantities in the phrase are not honoured"
-            )
-        }
+        AgentLog.info("searching Amazon for: \"$query\"")
 
-        // 1 — deep-link straight into in-app search results
+        // 1 — Deep-link straight into in-app search results
         val encoded = URLEncoder.encode(query, "UTF-8")
         if (!x.launchUri("https://www.amazon.in/s?k=$encoded", pkg)) {
             return FlowResult.Failed("search", "could not open the search deep link")
@@ -65,179 +46,120 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
         delay(SETTLE_MS)
         x.dismissInterstitials()
 
-        // 2 — first genuine result
-        val result = x.awaitNode(RESULT_ITEM, timeoutMs = 15_000)
-            ?: return FlowResult.Failed(
-                "results",
-                "no search result matched. Dump this screen and fix RESULT_ITEM.",
-            )
-        if (!x.tap(result)) return FlowResult.Failed("results", "could not tap the first result")
-        delay(SETTLE_MS)
-        x.dismissInterstitials()
-
-        // 3 — add to cart (usually below the fold)
-        val addToCart = x.scrollUntilVisible(ADD_TO_CART, maxScrolls = 10)
-            ?: return FlowResult.Failed("product", "'Add to Cart' not found on the product page")
-        if (!x.tap(addToCart)) return FlowResult.Failed("product", "could not tap 'Add to Cart'")
-        delay(SETTLE_MS)
-        // protection-plan and warranty upsells land here
-        x.dismissInterstitials(rounds = 3)
-
-        // 4 — cart
-        if (!x.launchUri("https://www.amazon.in/gp/cart/view.html", pkg)) {
-            return FlowResult.Failed("cart", "could not open the cart deep link")
-        }
-        if (!x.awaitPackage(pkg)) {
-            return FlowResult.Failed("cart", "left the Amazon app on the way to the cart")
-        }
-        delay(SETTLE_MS)
-        // Checkout takes the WHOLE cart, not just what this run added. Running
-        // the flow repeatedly (the reliability test asks for 5 passes) stacks
-        // items up, so an auto-confirmed run buys every one of them.
-        AgentLog.warn(
-            "checkout covers the entire cart, not only the item this run added — " +
-                "clear the cart between test runs"
+        // If Amazon opened search suggestions screen, tap first suggestion to load product results
+        val suggestion = x.awaitNode(
+            query(
+                "search suggestion",
+                Selector(id = "sac-suggestion-row-1"),
+                Selector(id = "sac-suggestion-row-1-cell-1"),
+                Selector(id = "sac-suggestion-row-2"),
+                Selector(id = "sac-suggestion-row-2-cell-1"),
+                Selector(id = "sac-suggestion-row-3"),
+                Selector(id = "search_suggestions_frame_layout"),
+            ),
+            timeoutMs = 2_500,
         )
-        val proceed = x.scrollUntilVisible(PROCEED_TO_BUY, maxScrolls = 6)
-            ?: return FlowResult.Failed("cart", "'Proceed to Buy' not found — is the cart empty?")
-        if (!x.tap(proceed)) return FlowResult.Failed("cart", "could not tap 'Proceed to Buy'")
-        delay(SETTLE_MS)
+        if (suggestion != null) {
+            AgentLog.info("Tapping search suggestion '${suggestion.label}' to load full search results...")
+            x.tapAt(suggestion.centerX, suggestion.centerY)
+            x.tap(suggestion)
+            delay(SETTLE_MS + 1_000)
+            x.dismissInterstitials()
+        }
 
-        // 5 — checkout funnel: address, then payment, then review.
-        // Amazon varies the order and count of these, so rather than hardcoding
-        // a sequence we loop: bail out when the final screen appears, grab the
-        // COD option whenever it shows up, otherwise press whatever advances.
-        var codSelected = false
-        for (step in 1..MAX_CHECKOUT_STEPS) {
-            if (x.awaitNode(PLACE_ORDER, timeoutMs = 2_000) != null) break
+        // 2 — Find the FIRST search result whose title matches the requested product
+        var matchedProductNode: UiNode? = null
+        var matchedTitle: String = ""
 
-            if (!codSelected) {
-                val cod = findCodOption(x)
-                if (cod != null && x.tap(cod)) {
-                    codSelected = true
-                    AgentLog.success("selected Cash / Pay on Delivery")
-                    delay(1_500)
-                    // Some builds nest a Cash vs Card-on-delivery sub-choice.
-                    // Guard on bounds: the sub-option query can resolve to the
-                    // very row we just tapped (both say "Cash on Delivery"), and
-                    // tapping a radio twice deselects it — which would leave
-                    // codSelected lying and fall the order through to a card.
-                    x.awaitNode(COD_SUBOPTION, timeoutMs = 2_000)?.let { sub ->
-                        if (sub.bounds != cod.bounds) {
-                            x.tap(sub)
-                            delay(1_200)
-                        } else {
-                            AgentLog.info("sub-option is the same row — not tapping twice")
-                        }
-                    }
-                }
-            }
-
-            // Once COD is chosen, stop offering the address buttons as advance
-            // candidates: a collapsed "Deliver to this address" summary row on
-            // the payment screen would send us back a step and lose the choice.
-            val advanceQuery = if (codSelected) PAYMENT_ADVANCE else CHECKOUT_ADVANCE
-            // Scroll fallback: hunting COD can leave the page scrolled past a
-            // non-sticky continue button, and giving up here would strand the
-            // flow one tap short of the review screen.
-            val advance = x.awaitNode(advanceQuery, timeoutMs = 2_000)
-                ?: x.scrollUntilVisible(advanceQuery, maxScrolls = 4)
-            if (advance == null) {
-                AgentLog.warn("checkout stalled on an unrecognised screen (step $step)")
+        val maxScanScrolls = 4
+        for (scroll in 0..maxScanScrolls) {
+            val snapshot = x.snapshot()
+            val match = findMatchingProductCard(snapshot, query)
+            if (match != null) {
+                matchedProductNode = match.first
+                matchedTitle = match.second
+                AgentLog.success("found matching product: \"$matchedTitle\"")
                 break
             }
-            x.tap(advance)
-            delay(SETTLE_MS)
+            if (scroll < maxScanScrolls) {
+                AgentLog.info("no match on visible screen (scroll $scroll/$maxScanScrolls) — scrolling down")
+                x.swipe(500, 1800, 500, 700)
+                delay(1_200)
+                x.dismissInterstitials()
+            }
         }
 
-        val placeOrder = x.awaitNode(PLACE_ORDER, timeoutMs = 10_000)
-            ?: return FlowResult.Failed(
-                "checkout",
-                "never reached the 'Place your order' screen — likely a login, OTP or captcha wall",
-            )
-
-        // 6 — independently confirm COD on the review screen. `codSelected` only
-        // says we tapped something; this says the order summary agrees.
-        val codOnReview = x.awaitNode(COD_CONFIRMATION, timeoutMs = 3_000) != null
-        val codProven = codSelected && codOnReview
-        AgentLog.info("COD check — tapped=$codSelected, shown on review=$codOnReview")
-
-        // 7 — the money step
-        if (!autoConfirm) {
-            AgentLog.halt(
-                if (codProven) {
-                    "STOPPED on '${placeOrder.label}' with Pay on Delivery selected. Tap it yourself."
-                } else {
-                    "STOPPED on '${placeOrder.label}' — but COD was NOT confirmed. " +
-                        "Check the payment method before tapping anything."
-                }
-            )
-            return FlowResult.AwaitingUser(
-                if (codProven) "Parked on the final confirm screen, COD selected. No order placed."
-                else "Parked on the final confirm screen. COD NOT confirmed — check payment method."
+        if (matchedProductNode == null) {
+            AgentLog.error("no search result reasonably matched \"$query\" — refusing to add a random product")
+            return FlowResult.Failed(
+                "search_match",
+                "no matching product found for \"$query\" among search results",
             )
         }
 
-        if (!codProven) {
-            // Refusing on purpose: without COD this would charge a saved card.
-            AgentLog.halt(
-                "REFUSING to place the order — auto-confirm is on but Cash/Pay on Delivery " +
-                    "could not be confirmed (tapped=$codSelected, review=$codOnReview). " +
-                    "Placing now could charge a saved card instead."
-            )
-            return FlowResult.AwaitingUser(
-                "Stopped short of ordering: COD unconfirmed, and placing anyway risks charging a card."
+        // 3 — Open the matching product
+        AgentLog.step("Opening product: \"$matchedTitle\"")
+        if (!x.tapAt(matchedProductNode.centerX, matchedProductNode.centerY) && !x.tap(matchedProductNode)) {
+            return FlowResult.Failed("results", "could not tap product card")
+        }
+        delay(SETTLE_MS + 500)
+        x.dismissInterstitials()
+
+        // 4 — Fresh observation on Product Detail Page: verify title matches requested product
+        val productPageTitle = verifyProductPageTitle(x, query)
+        if (productPageTitle == null) {
+            AgentLog.error("product page title does not match requested query \"$query\" — aborting")
+            return FlowResult.Failed(
+                "product_verify",
+                "product page title did not match requested query \"$query\"",
             )
         }
+        AgentLog.success("verified product page title: \"$productPageTitle\"")
 
-        AgentLog.warn("auto-confirm is ON and COD is confirmed — placing the order for real")
-        if (!x.tap(placeOrder)) return FlowResult.Failed("checkout", "could not tap 'Place your order'")
+        // 5 — Add to Cart (scroll down until Add to Cart button is visible)
+        AgentLog.step("Locating 'Add to Cart' button...")
+        val addToCart = x.scrollUntilVisible(ADD_TO_CART, maxScrolls = 8)
+            ?: return FlowResult.Failed("product", "'Add to Cart' button not found on product page")
 
-        // 8 — verify rather than assume. Tapping the button is not the same as
-        // the order going through: a payment wall, OTP or stock failure all
-        // leave you on a different screen. Reporting Success off the back of a
-        // tap would be a false success on the single most consequential step.
-        val confirmed = x.awaitNode(ORDER_CONFIRMATION, timeoutMs = 15_000) != null
-        return if (confirmed) {
-            FlowResult.Success("Cash-on-delivery order placed and confirmed")
+        if (!x.tapAt(addToCart.centerX, addToCart.centerY) && !x.tap(addToCart)) {
+            return FlowResult.Failed("product", "could not tap 'Add to Cart'")
+        }
+        delay(SETTLE_MS)
+        x.dismissInterstitials(rounds = 2)
+
+        // 6 — Open Cart and verify the requested product is present
+        AgentLog.step("Opening cart to verify product...")
+        val cartTab = x.awaitNode(
+            query("cart tab", Selector(desc = "Cart Tab"), Selector(desc = "Cart"), Selector(textContains = "Cart")),
+            timeoutMs = 1_500,
+        )
+        if (cartTab != null) {
+            x.tapAt(cartTab.centerX, cartTab.centerY)
+            x.tap(cartTab)
         } else {
-            // Failed (not AwaitingUser) on purpose: it triggers the automatic
-            // screen dump, which is exactly what you need to see here.
-            FlowResult.Failed(
-                "confirm",
-                "tapped 'Place your order' but no confirmation screen appeared within 15s. " +
-                    "The order MAY still have gone through — check Your Orders in the Amazon app.",
+            x.launchUri("https://www.amazon.in/gp/cart/view.html", pkg)
+        }
+        if (!x.awaitPackage(pkg)) {
+            return FlowResult.Failed("cart", "left Amazon on the way to cart")
+        }
+        delay(SETTLE_MS + 500)
+        x.dismissInterstitials()
+
+        val cartVerified = verifyProductInCart(x, query)
+        if (!cartVerified) {
+            AgentLog.error("cart verification failed: \"$query\" not found in cart")
+            return FlowResult.Failed(
+                "cart_verify",
+                "could not verify that \"$query\" is present in the cart",
             )
         }
+
+        AgentLog.success("Verified: \"$query\" is in the Amazon cart!")
+        return FlowResult.Success("Added and verified in Amazon cart: \"$productPageTitle\"")
     }
 
-    /**
-     * Only ever looks for COD on the payment screen.
-     *
-     * The gate is load-bearing, not an optimisation. Delivery blurbs elsewhere
-     * in checkout ("Pay on Delivery available", on the address step) match
-     * COD_OPTION too. Tapping one does nothing but sets `codSelected`, and the
-     * flow would then switch to PAYMENT_ADVANCE and sail past the real payment
-     * screen without ever choosing COD — a false positive that disables the
-     * very selection it claims to have made.
-     *
-     * If PAYMENT_SCREEN is wrong, COD is never selected, the review check fails
-     * and the order is refused. Safe direction to fail in.
-     */
-    private suspend fun findCodOption(x: ActionExecutor): UiNode? {
-        if (x.awaitNode(PAYMENT_SCREEN, timeoutMs = 1_000) == null) return null
-        AgentLog.step("on the payment screen — looking for Cash / Pay on Delivery")
-        return x.awaitNode(COD_OPTION, timeoutMs = 1_500)
-            ?: x.scrollUntilVisible(COD_OPTION, maxScrolls = 5)
-    }
-
-    private companion object {
-        const val MAX_CHECKOUT_STEPS = 5
-
-        /** Longer than this is a mis-transcription, not a product name. */
+    companion object {
         const val MAX_QUERY_LENGTH = 80
-
-        /** Render settle after the target app is confirmed foreground. */
         const val SETTLE_MS = 1_800L
 
         val PACKAGES = listOf(
@@ -245,114 +167,136 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
             "com.amazon.mShop.android.shopping",
         )
 
-        /** Ordered from most specific to a last-ditch heuristic. */
-        val RESULT_ITEM = query(
-            "first search result",
-            Selector(id = "search_result", clickable = true),
-            Selector(id = "result_item", clickable = true),
-            Selector(id = "product_image", clickable = true),
-            Selector(desc = "result", clickable = true),
-            Selector(clickable = true, minTextLen = 25),
+        val STOP_WORDS = setOf(
+            "a", "an", "the", "for", "in", "to", "and", "with", "of", "on", "me",
+            "add", "cart", "buy", "order", "please", "my", "from", "item", "product",
         )
 
         val ADD_TO_CART = query(
             "Add to Cart",
             Selector(id = "add_to_cart"),
+            Selector(id = "add-to-cart-button"),
             Selector(text = "Add to Cart"),
             Selector(textContains = "Add to Cart"),
             Selector(textContains = "Add to cart"),
-        )
-
-        val PROCEED_TO_BUY = query(
-            "Proceed to Buy",
-            Selector(textContains = "Proceed to Buy"),
-            Selector(textContains = "Proceed to checkout"),
-            Selector(id = "proceed_to_checkout"),
+            Selector(desc = "Add to Cart"),
+            Selector(desc = "Add to cart"),
         )
 
         /**
-         * Marker that we are on the payment-method screen at all.
-         *
-         * Broad on purpose: this gates COD selection entirely, so a miss costs
-         * the whole feature. The sibling payment methods are included because
-         * they co-occur on that screen and essentially nowhere else in checkout.
+         * Checks if [candidate] title is a reasonable match for [query].
+         * Tokenizes and ignores common stop words, requiring essential keywords
+         * (e.g. brand + item name) to be present.
          */
-        val PAYMENT_SCREEN = query(
-            "payment screen",
-            Selector(textContains = "payment method"),
-            Selector(textContains = "Select a payment"),
-            Selector(textContains = "Other payment options"),
-            Selector(textContains = "Net Banking"),
-            Selector(textContains = "Credit or debit card"),
-            Selector(textContains = "Credit/Debit"),
-            Selector(textContains = "Amazon Pay balance"),
-        )
+        fun isReasonableMatch(candidate: String, query: String): Boolean {
+            val queryTokens = extractKeywords(query)
+            if (queryTokens.isEmpty()) return false
+
+            val candidateNormalized = " " + normalize(candidate) + " "
+            if (candidateNormalized.isBlank()) return false
+
+            var matchedCount = 0
+            for (token in queryTokens) {
+                if (candidateNormalized.contains(token)) {
+                    matchedCount++
+                }
+            }
+
+            val minMatch = when {
+                queryTokens.size <= 2 -> queryTokens.size
+                queryTokens.size == 3 -> 2
+                else -> (queryTokens.size * 3) / 4
+            }
+            return matchedCount >= minMatch
+        }
+
+        fun extractKeywords(text: String): List<String> {
+            return normalize(text)
+                .split("\\s+".toRegex())
+                .filter { it.length >= 1 && it !in STOP_WORDS }
+        }
+
+        fun normalize(text: String): String {
+            return text.lowercase()
+                .replace("[^a-z0-9\\s]".toRegex(), " ")
+                .trim()
+        }
 
         /**
-         * Amazon India currently labels this "Pay on Delivery"; older builds and
-         * other marketplaces say "Cash on Delivery". A greyed-out option (COD
-         * unavailable for the item or pincode) will not match, because disabled
-         * nodes never match any selector — which is what we want here.
+         * Scans visible search result nodes from top to bottom and returns the first
+         * node whose title reasonably matches the query.
          */
-        val COD_OPTION = query(
-            "Cash / Pay on Delivery",
-            Selector(id = "cod"),
-            Selector(id = "pay_on_delivery"),
-            Selector(textContains = "Pay on Delivery"),
-            Selector(textContains = "Cash on Delivery"),
-            Selector(textContains = "Cash/Card on Delivery"),
-        )
+        fun findMatchingProductCard(nodes: List<UiNode>, query: String): Pair<UiNode, String>? {
+            val sortedNodes = nodes
+                .filter {
+                    it.bounds.height() > 20 && it.bounds.width() > 20 &&
+                        it.bounds.top >= 360 && it.bounds.bottom <= 2900 &&
+                        !it.viewId.contains("search", ignoreCase = true) &&
+                        !it.viewId.contains("chrome", ignoreCase = true) &&
+                        !it.viewId.contains("suggestion", ignoreCase = true) &&
+                        !it.viewId.contains("autocomplete", ignoreCase = true)
+                }
+                .sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
+
+            for (node in sortedNodes) {
+                val label = node.label.trim()
+                if (label.length < 10) continue
+                if (label.startsWith("http") || label.contains("Search Amazon") || label.contains("Deliver to")) continue
+                if (label.equals("Sponsored", ignoreCase = true) || label.equals("Results", ignoreCase = true) || label.contains("filters", ignoreCase = true)) continue
+
+                if (isReasonableMatch(label, query)) {
+                    return Pair(node, label)
+                }
+            }
+            return null
+        }
 
         /**
-         * Cash vs card-on-delivery sub-choice, when Amazon shows one.
-         *
-         * Exact matches only. A `textContains` here would also match the parent
-         * "Cash on Delivery" row we just selected; the call site additionally
-         * compares bounds, but the narrow selector is the first line of defence.
+         * Verifies that the currently open Product Detail Page has a title matching the query.
          */
-        val COD_SUBOPTION = query(
-            "Cash sub-option",
-            Selector(text = "Cash"),
-            Selector(text = "Cash on Delivery"),
-        )
+        suspend fun verifyProductPageTitle(x: ActionExecutor, query: String): String? {
+            val deadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < deadline) {
+                val snapshot = x.snapshot()
+                for (node in snapshot) {
+                    val label = node.label.trim()
+                    if (label.length >= 10 && isReasonableMatch(label, query)) {
+                        return label
+                    }
+                }
+                // Try scrolling up in case the page loaded scrolled down
+                x.swipe(500, 800, 500, 1800)
+                delay(800)
+                val snapshotAfterScroll = x.snapshot()
+                for (node in snapshotAfterScroll) {
+                    val label = node.label.trim()
+                    if (label.length >= 10 && isReasonableMatch(label, query)) {
+                        return label
+                    }
+                }
+                delay(500)
+            }
+            return null
+        }
 
-        /** Must be visible on the review screen before we are allowed to order. */
-        val COD_CONFIRMATION = query(
-            "COD on review screen",
-            Selector(textContains = "Pay on Delivery"),
-            Selector(textContains = "Cash on Delivery"),
-        )
-
-        val CHECKOUT_ADVANCE = query(
-            "checkout continue",
-            Selector(textContains = "Deliver to this address"),
-            Selector(textContains = "Use this address"),
-            Selector(textContains = "Use this payment method"),
-            Selector(text = "Continue"),
-        )
-
-        /** Post-COD advance. Deliberately excludes the address buttons. */
-        val PAYMENT_ADVANCE = query(
-            "payment continue",
-            Selector(textContains = "Use this payment method"),
-            Selector(text = "Continue"),
-        )
-
-        val PLACE_ORDER = query(
-            "Place your order",
-            Selector(textContains = "Place your order"),
-            Selector(textContains = "Place Your Order"),
-            Selector(textContains = "Place order"),
-        )
-
-        /** Proof the order actually went through, not just that we tapped. */
-        val ORDER_CONFIRMATION = query(
-            "order confirmation",
-            Selector(textContains = "Order placed"),
-            Selector(textContains = "order has been placed"),
-            Selector(textContains = "Thank you for your order"),
-            Selector(textContains = "Your order has been"),
-            Selector(textContains = "Order confirmed"),
-        )
+        /**
+         * Verifies that an item matching the query is present in the Amazon cart.
+         */
+        suspend fun verifyProductInCart(x: ActionExecutor, query: String): Boolean {
+            val deadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < deadline) {
+                val snapshot = x.snapshot()
+                for (node in snapshot) {
+                    val label = node.label.trim()
+                    if (label.length >= 10 && isReasonableMatch(label, query)) {
+                        AgentLog.info("verified item in cart: \"$label\"")
+                        return true
+                    }
+                }
+                x.swipe(500, 1600, 500, 1000)
+                delay(800)
+            }
+            return false
+        }
     }
 }

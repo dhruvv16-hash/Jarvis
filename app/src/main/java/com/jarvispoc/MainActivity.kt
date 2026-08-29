@@ -517,7 +517,7 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
 
         // ------------------------------------------------------------ amazon
         item {
-            SectionCard("1 · Amazon — search, cart, Cash on Delivery") {
+            SectionCard("1 · Amazon — search, match & add to cart") {
                 OutlinedTextField(
                     value = amazonQuery,
                     onValueChange = { amazonQuery = it },
@@ -526,17 +526,16 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
-                DangerToggle(
-                    checked = autoPlaceOrder,
-                    onCheckedChange = { autoPlaceOrder = it },
-                    onText = "Will place a real Cash-on-Delivery order — and only if COD is confirmed",
-                    offText = "Selects Pay on Delivery, then stops on the confirm screen. Nothing is ordered.",
+                Text(
+                    "Matches product title, verifies on product page, adds to cart, and verifies cart.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { startFlow(AmazonOrderFlow(amazonQuery.trim()), autoPlaceOrder) },
+                    onClick = { startFlow(AmazonOrderFlow(amazonQuery.trim()), true) },
                     enabled = (serviceBound || serviceEnabledInSettings) && !busy && amazonQuery.isNotBlank(),
-                ) { Text("Run Amazon flow") }
+                ) { Text("Search & Add to Cart") }
             }
         }
 
