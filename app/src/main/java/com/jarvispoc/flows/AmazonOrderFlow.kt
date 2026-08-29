@@ -153,12 +153,112 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
                 "could not verify that \"$query\" is present in the cart",
             )
         }
-
         AgentLog.success("Verified: \"$query\" is in the Amazon cart!")
-        return FlowResult.Success("Added and verified in Amazon cart: \"$productPageTitle\"")
+
+        // 7 — Click "Proceed to Buy"
+        AgentLog.step("Clicking 'Proceed to Buy'...")
+        val proceedToBuy = x.awaitNode(PROCEED_TO_BUY, timeoutMs = 4_000)
+            ?: x.scrollUntilVisible(PROCEED_TO_BUY, maxScrolls = 4)
+            ?: return FlowResult.Failed("cart", "could not find 'Proceed to Buy' button in cart")
+
+        if (!x.tapAt(proceedToBuy.centerX, proceedToBuy.centerY) && !x.tap(proceedToBuy)) {
+            return FlowResult.Failed("cart", "could not tap 'Proceed to Buy'")
+        }
+        delay(SETTLE_MS + 1_000)
+        x.dismissInterstitials()
+
+        // 8 — Navigate through checkout to Payment screen, choose Cash on Delivery, and tap Continue
+        var codSelected = false
+        var continueTapped = false
+
+        for (step in 1..MAX_CHECKOUT_STEPS) {
+            // Check if we are already parked on final review screen
+            val placeOrder = x.awaitNode(PLACE_ORDER, timeoutMs = 1_000)
+            if (placeOrder != null && codSelected && continueTapped) {
+                AgentLog.success("Parked on final review screen with Cash on Delivery selected!")
+                return FlowResult.AwaitingUser(
+                    "Parked on final review screen with Cash on Delivery selected. Tap 'Place Your Order' to complete."
+                )
+            }
+
+            // Look for Cash on Delivery / Pay on Delivery option
+            val cod = findCodOption(x)
+            if (cod != null) {
+                AgentLog.step("Found Cash / Pay on Delivery option — selecting it")
+                if (!x.tapAt(cod.centerX, cod.centerY) && !x.tap(cod)) {
+                    AgentLog.warn("could not tap COD option directly, trying sub-options")
+                }
+                delay(600)
+
+                // Select Cash sub-option if present (e.g. "Cash" radio button)
+                val cashRadio = x.awaitNode(COD_SUBOPTION, timeoutMs = 1_200)
+                if (cashRadio != null && cashRadio.bounds.top > cod.bounds.top) {
+                    x.tapAt(cashRadio.centerX, cashRadio.centerY)
+                    x.tap(cashRadio)
+                    delay(400)
+                }
+                codSelected = true
+
+                // Now locate the Continue / Use this payment method button
+                AgentLog.step("Locating 'Continue' / 'Use this payment method' button...")
+                val paymentAdvance = x.awaitNode(PAYMENT_ADVANCE, timeoutMs = 2_000)
+                    ?: x.scrollUntilVisible(PAYMENT_ADVANCE, maxScrolls = 6)
+
+                if (paymentAdvance != null) {
+                    AgentLog.step("Tapping Continue on payment screen...")
+                    x.tapAt(paymentAdvance.centerX, paymentAdvance.centerY)
+                    x.tap(paymentAdvance)
+                    continueTapped = true
+                    delay(SETTLE_MS + 1_000)
+                    x.dismissInterstitials()
+
+                    AgentLog.success("Successfully selected Cash on Delivery and clicked Continue!")
+                    return FlowResult.AwaitingUser(
+                        "Parked on final review screen with Cash on Delivery selected. Stopped before placing order."
+                    )
+                } else {
+                    AgentLog.warn("Payment advance button not found after selecting COD")
+                }
+            }
+
+            // If we are on an intermediate screen (e.g. Address selection)
+            val advance = x.awaitNode(CHECKOUT_ADVANCE, timeoutMs = 1_500)
+            if (advance != null) {
+                AgentLog.step("Advancing through intermediate checkout step: '${advance.label}'")
+                x.tapAt(advance.centerX, advance.centerY)
+                x.tap(advance)
+                delay(SETTLE_MS + 800)
+                x.dismissInterstitials()
+                continue
+            }
+
+            // Settle and try again
+            AgentLog.info("Checkout step $step: looking for payment or advance buttons...")
+            delay(800)
+        }
+
+        if (codSelected && continueTapped) {
+            return FlowResult.AwaitingUser("Parked on the final review screen with Cash on Delivery selected.")
+        } else if (codSelected) {
+            return FlowResult.AwaitingUser("Selected Cash on Delivery on the payment screen. Please review and continue.")
+        } else {
+            return FlowResult.Failed("checkout", "could not find Cash on Delivery option during checkout")
+        }
+    }
+
+    private suspend fun findCodOption(x: ActionExecutor): UiNode? {
+        val visibleCod = x.awaitNode(COD_OPTION, timeoutMs = 1_000)
+        if (visibleCod != null) return visibleCod
+
+        if (x.awaitNode(PAYMENT_SCREEN, timeoutMs = 1_000) != null) {
+            AgentLog.step("on payment screen — scrolling to find Cash / Pay on Delivery")
+            return x.scrollUntilVisible(COD_OPTION, maxScrolls = 6)
+        }
+        return null
     }
 
     companion object {
+        const val MAX_CHECKOUT_STEPS = 5
         const val MAX_QUERY_LENGTH = 80
         const val SETTLE_MS = 1_800L
 
@@ -181,6 +281,66 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
             Selector(textContains = "Add to cart"),
             Selector(desc = "Add to Cart"),
             Selector(desc = "Add to cart"),
+        )
+
+        val PROCEED_TO_BUY = query(
+            "Proceed to Buy",
+            Selector(textContains = "Proceed to Buy"),
+            Selector(textContains = "Proceed to checkout"),
+            Selector(id = "proceed_to_checkout"),
+            Selector(textContains = "Proceed to"),
+        )
+
+        val PAYMENT_SCREEN = query(
+            "payment screen",
+            Selector(textContains = "payment method"),
+            Selector(textContains = "Select a payment"),
+            Selector(textContains = "Other payment options"),
+            Selector(textContains = "Net Banking"),
+            Selector(textContains = "Credit or debit card"),
+            Selector(textContains = "Credit/Debit"),
+            Selector(textContains = "Amazon Pay balance"),
+            Selector(textContains = "Pay on Delivery"),
+            Selector(textContains = "Cash on Delivery"),
+        )
+
+        val COD_OPTION = query(
+            "Cash / Pay on Delivery",
+            Selector(id = "cod"),
+            Selector(id = "pay_on_delivery"),
+            Selector(textContains = "Pay on Delivery"),
+            Selector(textContains = "Cash on Delivery"),
+            Selector(textContains = "Cash/Card on Delivery"),
+            Selector(desc = "Pay on Delivery"),
+            Selector(desc = "Cash on Delivery"),
+        )
+
+        val COD_SUBOPTION = query(
+            "Cash sub-option",
+            Selector(text = "Cash"),
+            Selector(text = "Cash on Delivery"),
+        )
+
+        val CHECKOUT_ADVANCE = query(
+            "checkout continue",
+            Selector(textContains = "Deliver to this address"),
+            Selector(textContains = "Use this address"),
+            Selector(textContains = "Use this payment method"),
+            Selector(text = "Continue"),
+        )
+
+        val PAYMENT_ADVANCE = query(
+            "payment continue",
+            Selector(textContains = "Use this payment method"),
+            Selector(text = "Continue"),
+            Selector(textContains = "Continue"),
+        )
+
+        val PLACE_ORDER = query(
+            "Place your order",
+            Selector(textContains = "Place your order"),
+            Selector(textContains = "Place Your Order"),
+            Selector(textContains = "Place order"),
         )
 
         /**

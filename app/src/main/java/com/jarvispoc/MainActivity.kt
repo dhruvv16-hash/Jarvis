@@ -517,7 +517,7 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
 
         // ------------------------------------------------------------ amazon
         item {
-            SectionCard("1 · Amazon — search, match & add to cart") {
+            SectionCard("1 · Amazon — search, match & COD checkout") {
                 OutlinedTextField(
                     value = amazonQuery,
                     onValueChange = { amazonQuery = it },
@@ -527,7 +527,7 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Matches product title, verifies on product page, adds to cart, and verifies cart.",
+                    "Matches product title, verifies on product page, adds to cart, proceeds to buy, selects Cash on Delivery, clicks continue, and stops at final review.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -535,7 +535,7 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                 Button(
                     onClick = { startFlow(AmazonOrderFlow(amazonQuery.trim()), true) },
                     enabled = (serviceBound || serviceEnabledInSettings) && !busy && amazonQuery.isNotBlank(),
-                ) { Text("Search & Add to Cart") }
+                ) { Text("Search & Buy with COD") }
             }
         }
 
