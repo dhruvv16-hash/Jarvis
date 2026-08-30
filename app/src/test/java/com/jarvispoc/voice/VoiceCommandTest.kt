@@ -1,6 +1,6 @@
 package com.jarvispoc.voice
 
-import com.jarvispoc.flows.AmazonOrderFlow
+import com.jarvispoc.flows.EcommerceOrderFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -59,14 +59,43 @@ class VoiceCommandTest {
     }
 
     @Test
-    fun testAmazonReasonableMatchWithPriceQuery() {
+    fun testEcommerceReasonableMatchWithPriceQuery() {
         // When searching for "earbuds under 1000", product title matching should match the product keywords
         val title = "boAt Airdopes 141 Bluetooth Truly Wireless in Ear Earbuds with 42H Playtime"
-        assertTrue(AmazonOrderFlow.isReasonableMatch(title, "earbuds under 1000"))
-        assertTrue(AmazonOrderFlow.isReasonableMatch(title, "earbuds"))
+        assertTrue(EcommerceOrderFlow.isReasonableMatch(title, "earbuds under 1000"))
+        assertTrue(EcommerceOrderFlow.isReasonableMatch(title, "earbuds"))
 
         val mouseTitle = "Logitech B100 Wired Optical Mouse (Black)"
-        assertTrue(AmazonOrderFlow.isReasonableMatch(mouseTitle, "mouse under 999"))
-        assertTrue(AmazonOrderFlow.isReasonableMatch(mouseTitle, "mouse"))
+        assertTrue(EcommerceOrderFlow.isReasonableMatch(mouseTitle, "mouse under 999"))
+        assertTrue(EcommerceOrderFlow.isReasonableMatch(mouseTitle, "mouse"))
+    }
+
+    @Test
+    fun testFlipkartAndBlinkitParsing() {
+        val cmd1 = VoiceCommand.parse("Order milk on Blinkit")
+        assertEquals(VoiceCommand.Target.BLINKIT, cmd1.target)
+        assertEquals("milk", cmd1.searchQuery)
+
+        val cmd2 = VoiceCommand.parse("Buy iPhone on Flipkart")
+        assertEquals(VoiceCommand.Target.FLIPKART, cmd2.target)
+        assertEquals("iphone", cmd2.searchQuery)
+
+        val cmd3 = VoiceCommand.parse("Get some bread from Blinkit")
+        assertEquals(VoiceCommand.Target.BLINKIT, cmd3.target)
+        assertEquals("bread", cmd3.searchQuery)
+
+        // Split word transcriptions
+        val cmd4 = VoiceCommand.parse("Buy milk from blink it")
+        assertEquals(VoiceCommand.Target.BLINKIT, cmd4.target)
+        assertEquals("milk", cmd4.searchQuery)
+
+        val cmd5 = VoiceCommand.parse("Order earbuds on flip kart")
+        assertEquals(VoiceCommand.Target.FLIPKART, cmd5.target)
+        assertEquals("earbuds", cmd5.searchQuery)
+
+        // Default to Amazon
+        val cmd6 = VoiceCommand.parse("Buy milk")
+        assertEquals(VoiceCommand.Target.AMAZON, cmd6.target)
+        assertEquals("milk", cmd6.searchQuery)
     }
 }

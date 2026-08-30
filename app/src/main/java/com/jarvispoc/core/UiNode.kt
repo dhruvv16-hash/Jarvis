@@ -23,6 +23,8 @@ class UiNode(
     val scrollable: Boolean,
     val editable: Boolean,
     val enabled: Boolean,
+    val checked: Boolean,
+    val selected: Boolean,
     val packageName: String,
     val raw: AccessibilityNodeInfo? = null,
 ) {
@@ -51,6 +53,8 @@ class UiNode(
         append(",\"scrollable\":").append(scrollable)
         append(",\"editable\":").append(editable)
         append(",\"enabled\":").append(enabled)
+        append(",\"checked\":").append(checked)
+        append(",\"selected\":").append(selected)
         append(",\"pkg\":\"").append(esc(packageName)).append('"')
         append('}')
     }

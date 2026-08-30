@@ -7,6 +7,11 @@
       permission, so denying this degrades gracefully.
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!--
       Needed only by the voice path's "most recent photo". The photo picker
@@ -26,6 +31,8 @@
     <queries>
         <package android:name="in.amazon.mShop.android.shopping" />
         <package android:name="com.amazon.mShop.android.shopping" />
+        <package android:name="com.flipkart.android" />
+        <package android:name="com.grofers.customerapp" />
         <package android:name="com.instagram.android" />
         <intent>
             <action android:name="android.intent.action.SEND" />
@@ -38,6 +45,7 @@
     </queries>
 
     <application
+        android:name=".JarvisApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -89,6 +97,10 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <property
+            android:name="android.app.appfunctions.app_metadata"
+            android:resource="@xml/app_metadata" />
     </application>
 
 </manifest>

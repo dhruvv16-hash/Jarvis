@@ -1,17 +1,17 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
     namespace = "com.jarvispoc"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.jarvispoc"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1"
     }
@@ -34,18 +34,24 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    kotlinOptions {
-        jvmTarget = "11"
-    }
-
     buildFeatures {
         compose = true
+    }
+
+    ksp {
+        arg("appfunctions:aggregateAppFunctions", "true")
     }
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     }
 }
 
@@ -65,6 +71,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.mediapipe.tasks.genai)
     implementation(libs.mediapipe.tasks.vision)
+
+    implementation(libs.androidx.appfunctions.runtime)
+    implementation(libs.androidx.appfunctions.service)
+    ksp(libs.androidx.appfunctions.compiler)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

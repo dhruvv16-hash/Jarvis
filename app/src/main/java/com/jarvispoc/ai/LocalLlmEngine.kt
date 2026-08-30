@@ -13,6 +13,16 @@ import kotlinx.coroutines.withContext
 class LocalLlmEngine(private val context: Context) {
     private val mutex = Mutex()
 
+    data class StructuredIntent(
+        val targetApp: String,
+        val product: String?,
+        val priceLimit: String?,
+        val recipient: String?,
+        val time: String?,
+        val tone: String?,
+        val raw: String
+    )
+
     @Volatile
     private var engine: LlmInference? = null
 
@@ -41,6 +51,31 @@ class LocalLlmEngine(private val context: Context) {
         }
     }
 
+    suspend fun parseIntent(query: String): Result<StructuredIntent> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            runCatching {
+                val llm = engine ?: createEngine().also { engine = it }
+
+                val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                    .setTopK(TOP_K)
+                    .setTemperature(0.1f)
+                    .build()
+
+                LlmInferenceSession.createFromOptions(llm, sessionOptions).use { session ->
+                    val prompt = buildIntentPrompt(query)
+                    session.addQueryChunk(prompt)
+
+                    val started = System.currentTimeMillis()
+                    val raw = session.generateResponse()
+                    AgentLog.info("intent parsed in ${System.currentTimeMillis() - started}ms")
+                    parseStructuredIntent(raw, query)
+                }
+            }.onFailure {
+                AgentLog.error("intent parsing failed: ${it.javaClass.simpleName}: ${it.message}")
+            }
+        }
+    }
+
     private fun createEngine(): LlmInference {
         val model = ModelLocator.resolve(context)
             ?: error("Model not found.")
@@ -64,6 +99,51 @@ class LocalLlmEngine(private val context: Context) {
         Write a short, natural, and friendly reply.
         No quotation marks, no preamble. Just the reply.
     """.trimIndent()
+
+    private fun buildIntentPrompt(query: String): String = """
+        Extract parameters from the user request.
+        Request: "$query"
+        
+        Output format:
+        target_app: <Amazon|Flipkart|Blinkit|Instagram|Telegram|Chain|Alarm|Timer|Music|Call|Unknown>
+        product: <value or null>
+        price_limit: <value or null>
+        recipient: <value or null, e.g., name or number>
+        time: <value or null, e.g., 7:30 AM or 10 minutes>
+        tone: <value or null>
+        
+        Use 'Chain' if the request involves multiple steps, like searching then drafting or sharing.
+        Use 'Alarm' for setting alarms, 'Timer' for countdowns, and 'Music' for playing songs or artists.
+        For 'Music', put the song name or artist in the 'product' field.
+        Use 'Call' for making phone calls.
+    """.trimIndent()
+
+    private fun parseStructuredIntent(raw: String, originalQuery: String): StructuredIntent {
+        val cleanRaw = raw.replace("*", "").replace("_", "").replace("#", "").replace("`", "")
+        val lines = cleanRaw.lines()
+        val map = lines.associate { line ->
+            val parts = line.split(":", limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].trim().lowercase().replace(" ", "_")
+                val value = parts[1].trim().removePrefix("<").removeSuffix(">")
+                key to value
+            } else {
+                "" to ""
+            }
+        }
+
+        fun getOrNull(key: String): String? = map[key]?.takeIf { it != "null" && it.isNotBlank() }
+
+        return StructuredIntent(
+            targetApp = getOrNull("target_app") ?: "Unknown",
+            product = getOrNull("product"),
+            priceLimit = getOrNull("price_limit"),
+            recipient = getOrNull("recipient"),
+            time = getOrNull("time"),
+            tone = getOrNull("tone"),
+            raw = originalQuery
+        )
+    }
 
     private fun tidy(raw: String): String {
         return raw.substringBefore("<end_of_turn>")

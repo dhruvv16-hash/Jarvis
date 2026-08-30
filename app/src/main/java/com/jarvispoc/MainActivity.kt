@@ -61,8 +61,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import android.provider.ContactsContract
+import android.app.SearchManager
+import android.provider.AlarmClock
+import android.provider.MediaStore
 import com.jarvispoc.ai.CaptionEngine
 import com.jarvispoc.ai.CaptionEngines
+import com.jarvispoc.ai.LocalLlmEngine
+import com.jarvispoc.ai.LocalLlmEngines
 import com.jarvispoc.ai.ModelLocator
 import com.jarvispoc.core.AgentLog
 import com.jarvispoc.core.FlowResult
@@ -70,6 +76,8 @@ import com.jarvispoc.core.LogEntry
 import com.jarvispoc.core.LogLevel
 import com.jarvispoc.core.Photos
 import com.jarvispoc.flows.AmazonOrderFlow
+import com.jarvispoc.flows.EcommerceConfig
+import com.jarvispoc.flows.EcommerceOrderFlow
 import com.jarvispoc.flows.Flow
 import com.jarvispoc.flows.InstagramPostFlow
 import com.jarvispoc.service.JarvisAccessibilityService
@@ -95,12 +103,56 @@ class MainActivity : ComponentActivity() {
         // to this Activity would rebuild it on every configuration change.
         val captionEngine = CaptionEngines.shared(this)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(
+            androidx.compose.material3.MaterialTheme(
+                colorScheme = com.jarvispoc.ui.JarvisColorScheme,
+                typography = com.jarvispoc.ui.JarvisTypography
+            ) {
+                androidx.compose.material3.Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.background,
                 ) {
-                    ControlPanel(captionEngine)
+                    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+                        // Background grid
+                        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                            val gridSize = 100f
+                            for (x in 0..size.width.toInt() step gridSize.toInt()) {
+                                drawLine(
+                                    color = com.jarvispoc.ui.JarvisBlue.copy(alpha = 0.1f),
+                                    start = androidx.compose.ui.geometry.Offset(x.toFloat(), 0f),
+                                    end = androidx.compose.ui.geometry.Offset(x.toFloat(), size.height),
+                                    strokeWidth = 1f
+                                )
+                            }
+                            for (y in 0..size.height.toInt() step gridSize.toInt()) {
+                                drawLine(
+                                    color = com.jarvispoc.ui.JarvisBlue.copy(alpha = 0.1f),
+                                    start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
+                                    end = androidx.compose.ui.geometry.Offset(size.width, y.toFloat()),
+                                    strokeWidth = 1f
+                                )
+                            }
+                        }
+                        
+                        androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(0.3f)
+                                    .padding(16.dp),
+                                contentAlignment = androidx.compose.ui.Alignment.Center
+                            ) {
+                                com.jarvispoc.ui.ArcReactor(modifier = Modifier.fillMaxSize())
+                            }
+                            
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(0.7f)
+                            ) {
+                                ControlPanel(captionEngine)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -115,6 +167,7 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
     var serviceBound by remember { mutableStateOf(false) }
     var serviceEnabledInSettings by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var isThinking by remember { mutableStateOf(false) }
     var lastResult by remember { mutableStateOf("") }
     var runningFlow by remember { mutableStateOf<Job?>(null) }
 
@@ -123,7 +176,8 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
     var autoPlaceOrder by remember { mutableStateOf(false) }
     var autoSharePost by remember { mutableStateOf(true) }
 
-    var amazonQuery by remember { mutableStateOf("usb c cable") }
+    var shoppingQuery by remember { mutableStateOf("usb c cable") }
+    var shoppingPlatform by remember { mutableStateOf(EcommerceConfig.AMAZON) }
 
     var photo by remember { mutableStateOf<Bitmap?>(null) }
     var shareUri by remember { mutableStateOf<Uri?>(null) }
@@ -134,6 +188,14 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
     // Off by default: forcing offline makes the recogniser refuse outright on a
     // device with no offline language pack, rather than falling back.
     var preferOfflineSpeech by remember { mutableStateOf(false) }
+
+    val requestCallPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* checked at execution time */ }
+
+    val requestContactsPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* checked at execution time */ }
 
     val logs by AgentLog.entries.collectAsState()
 
@@ -215,6 +277,187 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
         AgentLog.warn("flow cancelled by user")
     }
 
+    fun findContactNumber(name: String): String? {
+        val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+        val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
+        val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+        val args = arrayOf("%$name%")
+
+        return context.contentResolver.query(uri, projection, selection, args, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }
+
+    fun placeDirectCall(number: String) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            AgentLog.warn("requesting phone permission to place direct call...")
+            // Opening dialer as fallback since launcher is in composable scope
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number"))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+            .onSuccess { AgentLog.success("calling $number...") }
+            .onFailure { AgentLog.error("could not place call", it) }
+    }
+
+    /**
+     * System commands: Alarm, Timer, Music.
+     */
+    fun executeSystemCommand(cmd: VoiceCommand) {
+        when (cmd.target) {
+            VoiceCommand.Target.ALARM -> {
+                val time = cmd.time ?: return AgentLog.error("no time specified for alarm")
+                AgentLog.info("Setting alarm for $time...")
+                
+                val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                    val digits = time.filter { it.isDigit() || it == ':' }.split(":")
+                    var hour = digits.firstOrNull()?.toIntOrNull() ?: 7
+                    val minute = digits.getOrNull(1)?.toIntOrNull() ?: 0
+                    val isPm = time.lowercase().contains("pm")
+                    val isAm = time.lowercase().contains("am")
+                    
+                    if (isPm && hour < 12) hour += 12
+                    if (isAm && hour == 12) hour = 0
+                    
+                    putExtra(AlarmClock.EXTRA_HOUR, hour)
+                    putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                    putExtra(AlarmClock.EXTRA_MESSAGE, "JARVIS Alarm")
+                    putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(intent) }
+                    .onSuccess { AgentLog.success("alarm clock opened") }
+                    .onFailure { AgentLog.error("could not set alarm", it) }
+            }
+
+            VoiceCommand.Target.TIMER -> {
+                val durationStr = cmd.time ?: return AgentLog.error("no duration specified for timer")
+                AgentLog.info("Setting timer for $durationStr...")
+                
+                val value = durationStr.filter { it.isDigit() }.toIntOrNull() ?: 300
+                val seconds = when {
+                    durationStr.contains("minute") || durationStr.contains("min") -> value * 60
+                    durationStr.contains("second") || durationStr.contains("sec") -> value
+                    else -> value // Default to seconds if unknown, or maybe minutes is more useful as default? 
+                }
+
+                val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                    putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+                    putExtra(AlarmClock.EXTRA_MESSAGE, "JARVIS Timer")
+                    putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(intent) }
+                    .onSuccess { AgentLog.success("timer started") }
+                    .onFailure { AgentLog.error("could not set timer", it) }
+            }
+
+            VoiceCommand.Target.MUSIC -> {
+                val query = cmd.searchQuery ?: "popular music"
+                AgentLog.info("Playing: $query")
+                
+                val intent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                    putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                    putExtra(SearchManager.QUERY, query)
+                    // These hints are crucial for automatic playback in apps like Spotify/YT Music
+                    putExtra("android.intent.extra.focus", "vnd.android.cursor.item/*")
+                    putExtra("android.intent.extra.asr_compliant", true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(intent) }
+                    .onSuccess { AgentLog.success("music playback initiated") }
+                    .onFailure { AgentLog.error("could not play music", it) }
+            }
+
+            VoiceCommand.Target.CALL -> {
+                val recipient = cmd.recipient ?: return AgentLog.error("no recipient specified for call")
+                AgentLog.info("Attempting to call $recipient...")
+
+                if (recipient.all { it.isDigit() || it == '+' || it == ' ' || it == '-' }) {
+                    placeDirectCall(recipient.replace(" ", "").replace("-", ""))
+                } else {
+                    // Search contacts
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                        AgentLog.warn("requesting contacts permission to find '$recipient'...")
+                        requestContactsPermission.launch(Manifest.permission.READ_CONTACTS)
+                        return
+                    }
+
+                    val number = findContactNumber(recipient)
+                    if (number != null) {
+                        AgentLog.success("found number for $recipient: $number")
+                        placeDirectCall(number)
+                    } else {
+                        AgentLog.warn("could not find '$recipient' in contacts — opening dialer")
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(recipient)}"))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Composite flow: Scrape -> Draft -> Share.
+     */
+    fun executeChainedFlow(cmd: VoiceCommand) {
+        val service = JarvisAccessibilityService.instance
+        if (service == null) {
+            AgentLog.error("accessibility service is not running")
+            return
+        }
+        val product = cmd.searchQuery
+        if (product.isNullOrBlank()) {
+            AgentLog.error("chained flow needs a product to search for")
+            return
+        }
+
+        busy = true
+        service.scope.launch {
+            try {
+                // 1. Scrape Amazon
+                AgentLog.info("--- Chained flow starting: Scrape -> Draft -> Share ---")
+                AgentLog.step("Step 1: Searching Amazon for '$product'...")
+                val details = AmazonOrderFlow("").scrapeProductDetails(service.executor, product)
+                
+                if (details == null) {
+                    AgentLog.error("could not find product details on Amazon to draft a note")
+                    return@launch
+                }
+                AgentLog.success("found: ${details.title} (${details.price ?: "no price"})")
+
+                // 2. Draft Note
+                AgentLog.step("Step 2: Drafting summary with AI...")
+                val llm = LocalLlmEngines.shared(context)
+                val prompt = "Draft a concise, friendly note for a friend about this product: ${details.title} priced at ${details.price}. Mention the rating: ${details.rating ?: "N/A"}."
+                val note = llm.reply(prompt).getOrDefault("Look at this: ${details.title} for ${details.price}")
+                AgentLog.success("note drafted")
+
+                // 3. Share
+                AgentLog.step("Step 3: Opening share sheet...")
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, note)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                AgentLog.success("chained flow complete!")
+
+            } catch (t: Throwable) {
+                AgentLog.error("chained flow failed", t)
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { busy = false }
+            }
+        }
+    }
+
     fun dumpAfterDelay(tag: String) {
         val service = JarvisAccessibilityService.instance
         if (service == null) {
@@ -241,33 +484,49 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
         AgentLog.info("parsed: ${cmd.summary}")
 
         when (cmd.target) {
-            VoiceCommand.Target.AMAZON -> {
+            VoiceCommand.Target.AMAZON, VoiceCommand.Target.FLIPKART, VoiceCommand.Target.BLINKIT -> {
                 val product = cmd.searchQuery
                 if (product.isNullOrBlank()) {
                     AgentLog.error(
-                        "heard an Amazon request but no product — say what to buy, " +
+                        "heard a shopping request but no product — say what to buy, " +
                             "e.g. \"order a USB C cable on Amazon\". Guessing is not an " +
                             "option when money is involved."
                     )
                     return
                 }
-                // Mirror it into the card so the parsed product is visible, not
-                // just spoken — a mis-transcription should be obvious on screen.
-                amazonQuery = product
+                
+                val config = when (cmd.target) {
+                    VoiceCommand.Target.FLIPKART -> EcommerceConfig.FLIPKART
+                    VoiceCommand.Target.BLINKIT -> EcommerceConfig.BLINKIT
+                    else -> EcommerceConfig.AMAZON
+                }
+
+                // Mirror it into the card so the parsed product is visible
+                shoppingQuery = product
+                shoppingPlatform = config
+                
                 if (autoPlaceOrder) {
                     AgentLog.warn(
                         "VOICE ORDER with auto-confirm ON — will place a real COD order " +
-                            "for \"$product\" if Pay on Delivery can be confirmed"
+                            "for \"$product\" on ${config.platformName} if COD can be confirmed"
                     )
                 }
-                startFlow(AmazonOrderFlow(product), autoPlaceOrder)
+                startFlow(EcommerceOrderFlow(product, config), autoPlaceOrder)
                 return
             }
             VoiceCommand.Target.UNKNOWN -> {
-                AgentLog.error("could not tell which app you meant — say \"Instagram\" explicitly")
+                AgentLog.error("JARVIS: I'm not sure what you want me to do. Try saying 'Order [item]', 'Call [name]', 'Set alarm', or 'Play [song]'.")
                 return
             }
             VoiceCommand.Target.INSTAGRAM -> Unit
+            VoiceCommand.Target.CHAIN -> {
+                executeChainedFlow(cmd)
+                return
+            }
+            VoiceCommand.Target.ALARM, VoiceCommand.Target.TIMER, VoiceCommand.Target.MUSIC, VoiceCommand.Target.CALL -> {
+                executeSystemCommand(cmd)
+                return
+            }
         }
 
         busy = true
@@ -392,13 +651,31 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
             return@rememberLauncherForActivityResult
         }
         heardText = spoken
-        // Parsing and dispatch run on the main thread inside this callback, so
-        // an exception here would take the process down rather than surface.
-        runCatching { runVoiceCommand(VoiceCommand.parse(spoken)) }
-            .onFailure {
-                busy = false
-                AgentLog.error("could not handle the spoken command", it)
+
+        uiScope.launch {
+            isThinking = true
+            busy = true
+            try {
+                AgentLog.info("JARVIS is thinking… (running LLM intent pass)")
+                val llm = LocalLlmEngines.shared(context)
+                val intentResult = llm.parseIntent(spoken)
+                
+                val command = intentResult.getOrNull()?.let {
+                    val cmd = VoiceCommand.fromStructuredIntent(it)
+                    if (cmd.target == VoiceCommand.Target.UNKNOWN) {
+                        AgentLog.info("LLM target UNKNOWN, falling back to deterministic parser")
+                        VoiceCommand.parse(spoken)
+                    } else cmd
+                } ?: VoiceCommand.parse(spoken) // Fallback to deterministic parser
+                
+                runVoiceCommand(command)
+            } catch (t: Throwable) {
+                AgentLog.error("could not handle the spoken command", t)
+            } finally {
+                isThinking = false
+                // runVoiceCommand handles its own busy state if it starts a flow
             }
+        }
     }
 
     val requestMedia = rememberLauncherForActivityResult(
@@ -450,6 +727,9 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                     ok = serviceBound,
                 )
                 StatusLine("Caption model", modelStatus, ok = !modelStatus.contains("MISSING"))
+                if (isThinking) {
+                    StatusLine("AI Processor", "THINKING…", ok = true)
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = {
@@ -518,12 +798,49 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
             }
         }
 
-        // ------------------------------------------------------------ amazon
+        // ------------------------------------------------------------ shopping
         item {
-            SectionCard("1 · Amazon — search, match & COD checkout") {
+            SectionCard("1 · Shopping — search, match & COD checkout") {
+                var expanded by remember { mutableStateOf(false) }
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Platform: ")
+                    TextButton(onClick = { expanded = true }) {
+                        Text(shoppingPlatform.platformName)
+                    }
+                }
+                
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Amazon") },
+                        onClick = { 
+                            shoppingPlatform = EcommerceConfig.AMAZON
+                            expanded = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Flipkart") },
+                        onClick = { 
+                            shoppingPlatform = EcommerceConfig.FLIPKART
+                            expanded = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Blinkit") },
+                        onClick = { 
+                            shoppingPlatform = EcommerceConfig.BLINKIT
+                            expanded = false
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = amazonQuery,
-                    onValueChange = { amazonQuery = it },
+                    value = shoppingQuery,
+                    onValueChange = { shoppingQuery = it },
                     label = { Text("Product to search") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -536,8 +853,8 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { startFlow(AmazonOrderFlow(amazonQuery.trim()), true) },
-                    enabled = (serviceBound || serviceEnabledInSettings) && !busy && amazonQuery.isNotBlank(),
+                    onClick = { startFlow(EcommerceOrderFlow(shoppingQuery.trim(), shoppingPlatform), true) },
+                    enabled = (serviceBound || serviceEnabledInSettings) && !busy && shoppingQuery.isNotBlank(),
                 ) { Text("Search & Buy with COD") }
             }
         }
@@ -804,9 +1121,24 @@ private fun launchSpeech(
 
 @Composable
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    androidx.compose.material3.OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = androidx.compose.material3.CardDefaults.outlinedCardColors(
+            containerColor = com.jarvispoc.ui.JarvisBackground.copy(alpha = 0.8f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, com.jarvispoc.ui.JarvisBlue.copy(alpha = 0.5f)),
+        shape = androidx.compose.foundation.shape.CutCornerShape(topStart = 16.dp, bottomEnd = 16.dp)
+    ) {
         Column(Modifier.padding(14.dp)) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                title.uppercase(), 
+                fontSize = 14.sp, 
+                fontWeight = FontWeight.Bold,
+                color = com.jarvispoc.ui.JarvisAccent,
+                letterSpacing = 2.sp
+            )
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.material3.Divider(color = com.jarvispoc.ui.JarvisBlue.copy(alpha = 0.3f), thickness = 1.dp)
             Spacer(Modifier.height(10.dp))
             content()
         }
@@ -821,11 +1153,20 @@ private fun DangerToggle(
     offText: String,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked, 
+            onCheckedChange = onCheckedChange,
+            colors = androidx.compose.material3.SwitchDefaults.colors(
+                checkedThumbColor = com.jarvispoc.ui.JarvisDanger,
+                checkedTrackColor = com.jarvispoc.ui.JarvisDanger.copy(alpha = 0.4f),
+                uncheckedThumbColor = Color.Gray,
+                uncheckedTrackColor = Color.DarkGray
+            )
+        )
         Text(
             "  ${if (checked) onText else offText}",
             fontSize = 12.sp,
-            color = if (checked) Color(0xFFFF6B6B) else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (checked) com.jarvispoc.ui.JarvisDanger else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
     }
@@ -834,12 +1175,13 @@ private fun DangerToggle(
 @Composable
 private fun StatusLine(label: String, value: String, ok: Boolean) {
     Row(modifier = Modifier.fillMaxWidth()) {
-        Text("$label: ", fontSize = 13.sp)
+        Text("[$label] ", fontSize = 12.sp, color = com.jarvispoc.ui.JarvisBlue)
         Text(
-            value,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (ok) Color(0xFF7FE3B0) else Color(0xFFFF8A65),
+            value.uppercase(),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (ok) Color(0xFF00FF00) else com.jarvispoc.ui.JarvisDanger,
+            letterSpacing = 1.sp
         )
     }
 }

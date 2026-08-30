@@ -1,5 +1,7 @@
 package com.jarvispoc.voice
 
+import com.jarvispoc.ai.LocalLlmEngine
+
 /**
  * What the user asked for, extracted from a spoken phrase.
  *
@@ -17,8 +19,12 @@ data class VoiceCommand(
     val tone: String,
     /** Product to search for, when the phrase named one. Null otherwise. */
     val searchQuery: String?,
+    /** Time for alarm or timer, when specified. */
+    val time: String? = null,
+    /** Recipient for call or message. */
+    val recipient: String? = null,
 ) {
-    enum class Target { INSTAGRAM, AMAZON, UNKNOWN }
+    enum class Target { INSTAGRAM, AMAZON, FLIPKART, BLINKIT, CHAIN, ALARM, TIMER, MUSIC, CALL, UNKNOWN }
 
     /** One-line description of what we understood, for the trace. */
     val summary: String
@@ -32,7 +38,15 @@ data class VoiceCommand(
         // No bare "gram": it is already covered by "instagram" and would also
         // fire on program / telegram / grammar.
         private val INSTAGRAM_WORDS = listOf("instagram", "insta", " ig ")
-        private val AMAZON_WORDS = listOf("amazon", "order", "buy", "purchase", "cart")
+        private val AMAZON_WORDS = listOf("amazon")
+        private val FLIPKART_WORDS = listOf("flipkart", "flip kart")
+        private val BLINKIT_WORDS = listOf("blinkit", "blink it")
+        private val ALARM_WORDS = listOf("alarm", "wake me", "wake up", "remind me", "alert", "set a", "set an")
+        private val TIMER_WORDS = listOf("timer", "countdown", "tier", "time me", "stopwatch", "start a", "start an")
+        private val MUSIC_WORDS = listOf("music", "play", "song", "artist", "beats", "tune", "spotify", "youtube")
+        private val CALL_WORDS = listOf("call", "dial", "phone", "contact", "ring")
+        private val SHOPPING_WORDS = listOf("order", "buy", "purchase", "cart", "search", "find", "get", "shop")
+        
         private val RECENT_WORDS = listOf(
             "most recent", "latest", "last photo", "last picture", "newest",
             "recent photo", "recent picture", "just took", "just clicked",
@@ -67,6 +81,8 @@ data class VoiceCommand(
             "on amazon india", "from amazon india", "on the amazon app",
             "to my amazon cart", "to my cart", "to the cart", "to cart",
             "on amazon", "from amazon", "in amazon", "on amazon in",
+            "on flipkart", "from flipkart", "in flipkart", "on flip kart", "from flip kart",
+            "on blinkit", "from blinkit", "in blinkit", "on blink it", "from blink it",
             "for me", "please", "now",
         )
 
@@ -139,17 +155,62 @@ data class VoiceCommand(
             return product.takeIf { it.length >= MIN_PRODUCT_LENGTH && it !in VAGUE_PRODUCTS }
         }
 
+        fun fromStructuredIntent(intent: LocalLlmEngine.StructuredIntent): VoiceCommand {
+            val target = when (intent.targetApp.lowercase()) {
+                "instagram" -> Target.INSTAGRAM
+                "amazon" -> Target.AMAZON
+                "flipkart" -> Target.FLIPKART
+                "blinkit" -> Target.BLINKIT
+                "chain", "composite" -> Target.CHAIN
+                "alarm" -> Target.ALARM
+                "timer" -> Target.TIMER
+                "music" -> Target.MUSIC
+                "call" -> Target.CALL
+                else -> Target.UNKNOWN
+            }
+
+            val query = if (intent.product != null) {
+                if (intent.priceLimit != null) "${intent.product} under ${intent.priceLimit}"
+                else intent.product
+            } else if (target == Target.MUSIC) extractMusicQuery(intent.raw)
+            else null
+
+            return VoiceCommand(
+                raw = intent.raw,
+                target = target,
+                useMostRecentPhoto = intent.raw.lowercase().contains("recent") || intent.raw.lowercase().contains("latest"),
+                autoCaption = intent.raw.lowercase().contains("caption") || target == Target.INSTAGRAM,
+                tone = intent.tone ?: DEFAULT_TONE,
+                searchQuery = query,
+                time = intent.time,
+                recipient = intent.recipient
+            )
+        }
+
         fun parse(spoken: String): VoiceCommand {
             // Pad so " ig " can match at either end without a word-boundary regex.
             val text = " ${spoken.lowercase().trim()} "
 
             val target = when {
                 INSTAGRAM_WORDS.any { text.contains(it) } -> Target.INSTAGRAM
+                FLIPKART_WORDS.any { text.contains(it) } -> Target.FLIPKART
+                BLINKIT_WORDS.any { text.contains(it) } -> Target.BLINKIT
+                ALARM_WORDS.any { text.contains(it) } -> Target.ALARM
+                TIMER_WORDS.any { text.contains(it) } -> Target.TIMER
+                MUSIC_WORDS.any { text.contains(it) } -> Target.MUSIC
+                CALL_WORDS.any { text.contains(it) } -> Target.CALL
                 AMAZON_WORDS.any { text.contains(it) } -> Target.AMAZON
+                SHOPPING_WORDS.any { text.contains(it) } -> Target.AMAZON // Default shopping to Amazon if no platform named
                 else -> Target.UNKNOWN
             }
 
             val tone = TONES.firstOrNull { text.contains(it.first) }?.second ?: DEFAULT_TONE
+
+            val isShopping = target in listOf(Target.AMAZON, Target.FLIPKART, Target.BLINKIT)
+
+            val query = if (isShopping) extractProduct(text)
+            else if (target == Target.MUSIC) extractMusicQuery(spoken.trim())
+            else null
 
             return VoiceCommand(
                 raw = spoken.trim(),
@@ -160,8 +221,45 @@ data class VoiceCommand(
                 autoCaption = CAPTION_WORDS.any { text.contains(it) } ||
                     target == Target.INSTAGRAM,
                 tone = tone,
-                searchQuery = if (target == Target.AMAZON) extractProduct(text) else null,
+                searchQuery = query,
+                time = if (target == Target.ALARM || target == Target.TIMER) extractTimeFallback(text) else null,
+                recipient = if (target == Target.CALL) extractRecipientFallback(text) else null
             )
+        }
+
+        private fun extractMusicQuery(spoken: String): String {
+            val lower = spoken.lowercase()
+            var clean = lower
+            val triggers = listOf("play music by", "play music", "play some", "play a", "play the", "play")
+            
+            for (trigger in triggers) {
+                if (lower.startsWith(trigger)) {
+                    clean = lower.removePrefix(trigger).trim()
+                    break
+                }
+            }
+            
+            return clean.removeSuffix("on spotify").removeSuffix("on youtube").trim()
+        }
+
+        private fun extractTimeFallback(text: String): String? {
+            // Expanded extraction for the regex fallback
+            // Handles: "7:30 am", "8pm", "10 minutes", "5 min", "30 seconds", "at 7", "for 8"
+            val timeRegex = Regex("""(\d{1,2}(?::\d{2})?\s*(?:am|pm|minutes?|min|seconds?|sec))""", RegexOption.IGNORE_CASE)
+            val simpleDigitRegex = Regex("""\b(\d{1,2})\b""")
+            
+            return timeRegex.find(text)?.value ?: simpleDigitRegex.find(text)?.value
+        }
+
+        private fun extractRecipientFallback(text: String): String? {
+            // Simple recipient extraction: anything after "call" or "dial"
+            val triggers = listOf("call", "dial")
+            for (trigger in triggers) {
+                if (text.contains(" $trigger ")) {
+                    return text.substringAfter(" $trigger ").trim().split(" ").firstOrNull()
+                }
+            }
+            return null
         }
     }
 }

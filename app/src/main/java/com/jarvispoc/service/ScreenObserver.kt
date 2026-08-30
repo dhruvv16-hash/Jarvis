@@ -84,6 +84,8 @@ object ScreenObserver {
                     scrollable = node.isScrollable,
                     editable = node.isEditable,
                     enabled = node.isEnabled,
+                    checked = node.isChecked,
+                    selected = node.isSelected,
                     packageName = node.packageName?.toString().orEmpty(),
                     raw = node,
                 )

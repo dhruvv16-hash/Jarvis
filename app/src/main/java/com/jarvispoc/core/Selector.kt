@@ -28,6 +28,8 @@ data class Selector(
     val clickable: Boolean? = null,
     val editable: Boolean? = null,
     val scrollable: Boolean? = null,
+    val checked: Boolean? = null,
+    val selected: Boolean? = null,
     /** Rejects nodes whose longest label is shorter than this. Filters out chrome. */
     val minTextLen: Int? = null,
 ) {
@@ -49,6 +51,8 @@ data class Selector(
         clickable?.let { if (n.clickable != it) return false }
         editable?.let { if (n.editable != it) return false }
         scrollable?.let { if (n.scrollable != it) return false }
+        checked?.let { if (n.checked != it) return false }
+        selected?.let { if (n.selected != it) return false }
         minTextLen?.let { if (maxOf(n.text.length, n.contentDescription.length) < it) return false }
         return true
     }

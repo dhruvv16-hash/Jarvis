@@ -362,15 +362,28 @@ class ActionExecutor(private val service: JarvisAccessibilityService) {
         return null
     }
 
-    private suspend fun scrollForward(): Boolean {
-        val target = snapshot()
+    suspend fun scrollForward(): Boolean {
+        val nodes = snapshot()
+        val target = nodes
             .filter { it.scrollable }
             .maxByOrNull { it.bounds.width().toLong() * it.bounds.height().toLong() }
+            
         if (target != null && target.raw?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true) {
+            AgentLog.step("scrolled forward via ACTION_SCROLL_FORWARD")
             return true
         }
-        // Fallback: physical swipe gesture for WebViews, Compose, and custom scrolling layouts
-        return swipe(720, 2000, 720, 700)
+
+        // Fallback: physical swipe gesture
+        val root = nodes.maxByOrNull { it.bounds.width().toLong() * it.bounds.height().toLong() }
+        val screenHeight = root?.bounds?.bottom ?: 2400
+        val screenWidth = root?.bounds?.right ?: 1080
+        
+        val x = screenWidth / 2
+        val yStart = (screenHeight * 0.85).toInt()
+        val yEnd = (screenHeight * 0.15).toInt()
+        
+        AgentLog.info("scrolling forward via swipe ($x, $yStart -> $x, $yEnd)")
+        return swipe(x, yStart, x, yEnd, durationMs = 400)
     }
 
     // --------------------------------------------------------- interstitials
@@ -462,6 +475,8 @@ class ActionExecutor(private val service: JarvisAccessibilityService) {
             "Skip",
             "Not now",
             "Maybe later",
+            "Decline",
+            "Dismiss",
         )
     }
 }
