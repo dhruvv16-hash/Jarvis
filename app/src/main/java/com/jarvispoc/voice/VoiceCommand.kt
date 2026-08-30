@@ -84,16 +84,12 @@ data class VoiceCommand(
         /** Shorter than this is almost certainly a mis-transcription, not a product. */
         private const val MIN_PRODUCT_LENGTH = 3
 
-        /**
-         * Pulls the product out of e.g. "order a usb c cable on amazon".
-         *
-         * Returns null when nothing survives — "place an order on amazon" names
-         * no product, and guessing one when money is involved is not a service.
-         */
-        private fun extractProduct(text: String): String? {
-            val trigger = PRODUCT_TRIGGERS.firstOrNull { text.contains(" $it ") } ?: return null
-            var rest = text.substringAfter(" $trigger ").trim()
+        private val PRICE_PATTERN = Regex(
+            """(?i)\b(under|below)\s*(?:₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:rupees|rs\.?|inr)?"""
+        )
 
+        private fun cleanProductString(raw: String): String {
+            var rest = raw.trim()
             var changed = true
             while (changed) {
                 changed = false
@@ -110,8 +106,37 @@ data class VoiceCommand(
                     }
                 }
             }
-            rest = rest.trim(' ', ',', '.', '!', '?')
-            return rest.takeIf { it.length >= MIN_PRODUCT_LENGTH && it !in VAGUE_PRODUCTS }
+            return rest.trim(' ', ',', '.', '!', '?')
+        }
+
+        /**
+         * Pulls the product out of e.g. "order a usb c cable on amazon".
+         * If a price limit is specified (e.g. "under ₹1000", "below 1500"),
+         * extracts the product and price limit into "<product> under <price>".
+         *
+         * Returns null when nothing survives — "place an order on amazon" names
+         * no product, and guessing one when money is involved is not a service.
+         */
+        private fun extractProduct(text: String): String? {
+            val trigger = PRODUCT_TRIGGERS.firstOrNull { text.contains(" $it ") } ?: return null
+            var rest = text.substringAfter(" $trigger ").trim()
+
+            rest = cleanProductString(rest)
+
+            val priceMatch = PRICE_PATTERN.find(rest)
+            if (priceMatch != null) {
+                val rawProduct = rest.substring(0, priceMatch.range.first)
+                val product = cleanProductString(rawProduct)
+                val price = priceMatch.groupValues[2].replace(",", "").trim()
+                return if (product.length >= MIN_PRODUCT_LENGTH && product !in VAGUE_PRODUCTS && price.isNotBlank()) {
+                    "$product under $price"
+                } else {
+                    null
+                }
+            }
+
+            val product = cleanProductString(rest)
+            return product.takeIf { it.length >= MIN_PRODUCT_LENGTH && it !in VAGUE_PRODUCTS }
         }
 
         fun parse(spoken: String): VoiceCommand {

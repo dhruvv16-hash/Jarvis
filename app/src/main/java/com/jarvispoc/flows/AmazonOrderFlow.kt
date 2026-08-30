@@ -270,6 +270,7 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
         val STOP_WORDS = setOf(
             "a", "an", "the", "for", "in", "to", "and", "with", "of", "on", "me",
             "add", "cart", "buy", "order", "please", "my", "from", "item", "product",
+            "under", "below",
         )
 
         val ADD_TO_CART = query(
@@ -371,7 +372,8 @@ class AmazonOrderFlow(private val searchQuery: String) : Flow {
         }
 
         fun extractKeywords(text: String): List<String> {
-            return normalize(text)
+            val cleaned = text.replace("(?i)\\b(under|below)\\s*\\d+\\b".toRegex(), " ")
+            return normalize(cleaned)
                 .split("\\s+".toRegex())
                 .filter { it.length >= 1 && it !in STOP_WORDS }
         }
