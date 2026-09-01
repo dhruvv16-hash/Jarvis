@@ -16,3 +16,8 @@ captures/
 
 # Device dumps pulled back for selector work.
 /dumps/
+
+*.bin
+*.xnnpack_cache
+matrix-os-main/
+.freebuff/

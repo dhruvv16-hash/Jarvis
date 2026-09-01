@@ -50,6 +50,7 @@ android {
 }
 
 kotlin {
+    jvmToolchain(17)
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     }
@@ -75,6 +76,11 @@ dependencies {
     implementation(libs.androidx.appfunctions.runtime)
     implementation(libs.androidx.appfunctions.service)
     ksp(libs.androidx.appfunctions.compiler)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.google.gson)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
+
