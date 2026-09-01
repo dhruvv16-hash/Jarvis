@@ -1,4 +1,4 @@
-package com.jarvispoc.agent
+﻿package com.jarvispoc.agent
 
 import com.jarvispoc.agent.learning.AdaptationEngine
 import com.jarvispoc.agent.learning.ProcedureLearner
@@ -26,7 +26,7 @@ class AgentLoop(
 
             val context = contextProvider.buildContext(request, currentObservation)
             
-            val decision = planner.decideNextAction(context, request.goal, request.sessionId, request.taskId)
+            val decision = planner.decideNextAction(context, request)
 
             when (decision) {
                 is PlannerDecision.Complete -> {

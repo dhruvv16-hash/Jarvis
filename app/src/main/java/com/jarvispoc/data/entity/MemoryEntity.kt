@@ -1,4 +1,4 @@
-package com.jarvispoc.data.entity
+﻿package com.jarvispoc.data.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
@@ -10,13 +10,16 @@ data class MemoryEntity(
     @PrimaryKey val id: String,
     val content: String,
     val category: MemoryCategory,
+    val scope: String,
     val source: String,
     val appId: String?,
+    val capabilityId: String?,
     val importance: Int,
     val confidence: Float,
     val expiresAt: Long?,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val active: Boolean
 )
 
 @Entity(tableName = "memories_fts")

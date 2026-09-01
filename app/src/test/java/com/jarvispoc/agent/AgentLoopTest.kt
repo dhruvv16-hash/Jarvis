@@ -1,4 +1,4 @@
-package com.jarvispoc.agent
+﻿package com.jarvispoc.agent
 
 import com.jarvispoc.testdoubles.FakeContextProvider
 import com.jarvispoc.testdoubles.FakePlanner
@@ -32,7 +32,7 @@ class AgentLoopTest {
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor)
 
         val goal = Goal("g1", "Search Amazon for USB-C", "Search Amazon for USB-C", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Search Amazon", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Search Amazon", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 
@@ -57,7 +57,7 @@ class AgentLoopTest {
 
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor)
         val goal = Goal("g1", "Buy milk", "Buy milk", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Buy milk", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Buy milk", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 
@@ -85,7 +85,7 @@ class AgentLoopTest {
 
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor, maxTurns = 3)
         val goal = Goal("g1", "Do something forever", "Loop", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Loop", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Loop", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 
@@ -110,7 +110,7 @@ class AgentLoopTest {
 
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor)
         val goal = Goal("g1", "Test", "Test", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Test", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Test", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 
@@ -132,7 +132,7 @@ class AgentLoopTest {
 
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor)
         val goal = Goal("g1", "Test", "Test", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Test", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Test", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 
@@ -161,7 +161,7 @@ class AgentLoopTest {
 
         val loop = AgentLoop(fakeContext, fakePlanner, fakeExecutor)
         val goal = Goal("g1", "Order milk", "Order milk", emptyMap(), emptyMap(), 0L)
-        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Order milk", emptyMap())
+        val request = AgentRequest("r1", "u1", "s1", "t1", goal, "Order milk", RequestSource.USER_DIRECT, emptyMap())
 
         val response = loop.run(request)
 

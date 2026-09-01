@@ -1,4 +1,4 @@
-package com.jarvispoc.agent
+﻿package com.jarvispoc.agent
 
 import com.jarvispoc.execution.ExecutionResult
 import com.jarvispoc.tools.ToolCall
@@ -8,7 +8,7 @@ interface AgentContextProvider {
 }
 
 interface AgentPlanner {
-    suspend fun decideNextAction(context: String, goal: Goal, sessionId: String, taskId: String?): PlannerDecision
+    suspend fun decideNextAction(context: String, request: AgentRequest): PlannerDecision
 }
 
 interface AgentToolExecutor {

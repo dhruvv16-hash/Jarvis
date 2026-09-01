@@ -1,4 +1,4 @@
-package com.jarvispoc.testdoubles
+﻿package com.jarvispoc.testdoubles
 
 import com.jarvispoc.agent.AgentPlanner
 import com.jarvispoc.agent.AgentRequest
@@ -11,7 +11,7 @@ class FakePlanner(
 ) : AgentPlanner {
     private var callIndex = 0
 
-    override suspend fun decideNextAction(context: String, goal: Goal, sessionId: String, taskId: String?): PlannerDecision {
+    override suspend fun decideNextAction(context: String, request: AgentRequest): PlannerDecision {
         if (callIndex < decisions.size) {
             return decisions[callIndex++]
         }
