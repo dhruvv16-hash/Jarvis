@@ -1,4 +1,4 @@
-package com.jarvispoc.voice
+﻿package com.jarvispoc.voice
 
 import com.jarvispoc.ai.LocalLlmEngine
 
@@ -72,7 +72,7 @@ data class VoiceCommand(
             "order me a", "order me an", "order me", "order a", "order an", "order the", "order",
             "buy me a", "buy me an", "buy me", "buy a", "buy an", "buy the", "buy",
             "purchase a", "purchase an", "purchase the", "purchase",
-            "get me a", "get me an", "get me the", "get me",
+            "get me a", "get me an", "get me the", "get me", "get some",
             "add a", "add an", "add",
         ).sortedByDescending { it.length }
 
@@ -130,7 +130,7 @@ data class VoiceCommand(
          * If a price limit is specified (e.g. "under ₹1000", "below 1500"),
          * extracts the product and price limit into "<product> under <price>".
          *
-         * Returns null when nothing survives — "place an order on amazon" names
+         * Returns null when nothing survives â€” "place an order on amazon" names
          * no product, and guessing one when money is involved is not a service.
          */
         private fun extractProduct(text: String): String? {
@@ -192,15 +192,15 @@ data class VoiceCommand(
             val text = " ${spoken.lowercase().trim()} "
 
             val target = when {
-                INSTAGRAM_WORDS.any { text.contains(it) } -> Target.INSTAGRAM
-                FLIPKART_WORDS.any { text.contains(it) } -> Target.FLIPKART
-                BLINKIT_WORDS.any { text.contains(it) } -> Target.BLINKIT
-                ALARM_WORDS.any { text.contains(it) } -> Target.ALARM
-                TIMER_WORDS.any { text.contains(it) } -> Target.TIMER
-                MUSIC_WORDS.any { text.contains(it) } -> Target.MUSIC
-                CALL_WORDS.any { text.contains(it) } -> Target.CALL
-                AMAZON_WORDS.any { text.contains(it) } -> Target.AMAZON
-                SHOPPING_WORDS.any { text.contains(it) } -> Target.AMAZON // Default shopping to Amazon if no platform named
+                INSTAGRAM_WORDS.any { text.contains(" $it ") } -> Target.INSTAGRAM
+                FLIPKART_WORDS.any { text.contains(" $it ") } -> Target.FLIPKART
+                BLINKIT_WORDS.any { text.contains(" $it ") } -> Target.BLINKIT
+                ALARM_WORDS.any { text.contains(" $it ") } -> Target.ALARM
+                TIMER_WORDS.any { text.contains(" $it ") } -> Target.TIMER
+                MUSIC_WORDS.any { text.contains(" $it ") } -> Target.MUSIC
+                CALL_WORDS.any { text.contains(" $it ") } -> Target.CALL
+                AMAZON_WORDS.any { text.contains(" $it ") } -> Target.AMAZON
+                SHOPPING_WORDS.any { text.contains(" $it ") } -> Target.AMAZON // Default shopping to Amazon if no platform named
                 else -> Target.UNKNOWN
             }
 
@@ -215,10 +215,10 @@ data class VoiceCommand(
             return VoiceCommand(
                 raw = spoken.trim(),
                 target = target,
-                useMostRecentPhoto = RECENT_WORDS.any { text.contains(it) },
+                useMostRecentPhoto = RECENT_WORDS.any { text.contains(" $it ") },
                 // "post it on instagram" implies a caption is wanted even when
                 // the word itself is never spoken.
-                autoCaption = CAPTION_WORDS.any { text.contains(it) } ||
+                autoCaption = CAPTION_WORDS.any { text.contains(" $it ") } ||
                     target == Target.INSTAGRAM,
                 tone = tone,
                 searchQuery = query,
