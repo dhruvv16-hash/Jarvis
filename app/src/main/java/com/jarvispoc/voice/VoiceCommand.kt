@@ -1,4 +1,4 @@
-﻿package com.jarvispoc.voice
+package com.jarvispoc.voice
 
 import com.jarvispoc.ai.LocalLlmEngine
 
@@ -23,13 +23,15 @@ data class VoiceCommand(
     val time: String? = null,
     /** Recipient for call or message. */
     val recipient: String? = null,
+    /** App name to launch, when target is LAUNCH_APP. */
+    val appName: String? = null,
 ) {
-    enum class Target { INSTAGRAM, AMAZON, FLIPKART, BLINKIT, CHAIN, ALARM, TIMER, MUSIC, CALL, UNKNOWN }
+    enum class Target { INSTAGRAM, AMAZON, FLIPKART, BLINKIT, CHAIN, ALARM, TIMER, MUSIC, CALL, LAUNCH_APP, UNKNOWN }
 
     /** One-line description of what we understood, for the trace. */
     val summary: String
         get() = "target=$target, mostRecentPhoto=$useMostRecentPhoto, " +
-            "autoCaption=$autoCaption, tone='$tone', product=${searchQuery?.let { "'$it'" } ?: "none"}"
+            "autoCaption=$autoCaption, tone='$tone', product=${searchQuery?.let { "'$it'" } ?: "none"}, app=${appName?.let { "'$it'" } ?: "none"}"
 
     companion object {
 
@@ -46,6 +48,11 @@ data class VoiceCommand(
         private val MUSIC_WORDS = listOf("music", "play", "song", "artist", "beats", "tune", "spotify", "youtube")
         private val CALL_WORDS = listOf("call", "dial", "phone", "contact", "ring")
         private val SHOPPING_WORDS = listOf("order", "buy", "purchase", "cart", "search", "find", "get", "shop")
+        private val LAUNCH_WORDS = listOf(
+            "open the", "open up", "open",
+            "launch the", "launch",
+            "start the", "start"
+        )
         
         private val RECENT_WORDS = listOf(
             "most recent", "latest", "last photo", "last picture", "newest",
@@ -166,6 +173,7 @@ data class VoiceCommand(
                 "timer" -> Target.TIMER
                 "music" -> Target.MUSIC
                 "call" -> Target.CALL
+                "launch", "open" -> Target.LAUNCH_APP
                 else -> Target.UNKNOWN
             }
 
@@ -175,6 +183,8 @@ data class VoiceCommand(
             } else if (target == Target.MUSIC) extractMusicQuery(intent.raw)
             else null
 
+            val appName = if (target == Target.LAUNCH_APP) intent.product ?: intent.raw else null
+
             return VoiceCommand(
                 raw = intent.raw,
                 target = target,
@@ -183,24 +193,46 @@ data class VoiceCommand(
                 tone = intent.tone ?: DEFAULT_TONE,
                 searchQuery = query,
                 time = intent.time,
-                recipient = intent.recipient
+                recipient = intent.recipient,
+                appName = appName,
             )
+        }
+
+        private fun extractAppName(text: String): String? {
+            for (trigger in LAUNCH_WORDS) {
+                if (text.contains(" $trigger ")) {
+                    val raw = text.substringAfter(" $trigger ").trim()
+                    val clean = raw.removeSuffix(" app").removeSuffix(" application").trim()
+                    if (clean.length >= 2) {
+                        return clean
+                    }
+                }
+            }
+            return null
         }
 
         fun parse(spoken: String): VoiceCommand {
             // Pad so " ig " can match at either end without a word-boundary regex.
             val text = " ${spoken.lowercase().trim()} "
 
+            val isLaunch = LAUNCH_WORDS.any { text.contains(" $it ") }
+            val isProductShopping = PRODUCT_TRIGGERS.any { text.contains(" $it ") }
+
             val target = when {
-                INSTAGRAM_WORDS.any { text.contains(" $it ") } -> Target.INSTAGRAM
-                FLIPKART_WORDS.any { text.contains(" $it ") } -> Target.FLIPKART
-                BLINKIT_WORDS.any { text.contains(" $it ") } -> Target.BLINKIT
                 ALARM_WORDS.any { text.contains(" $it ") } -> Target.ALARM
                 TIMER_WORDS.any { text.contains(" $it ") } -> Target.TIMER
-                MUSIC_WORDS.any { text.contains(" $it ") } -> Target.MUSIC
                 CALL_WORDS.any { text.contains(" $it ") } -> Target.CALL
+                isProductShopping && FLIPKART_WORDS.any { text.contains(" $it ") } -> Target.FLIPKART
+                isProductShopping && BLINKIT_WORDS.any { text.contains(" $it ") } -> Target.BLINKIT
+                isProductShopping && AMAZON_WORDS.any { text.contains(" $it ") } -> Target.AMAZON
+                isProductShopping -> Target.AMAZON
+                isLaunch -> Target.LAUNCH_APP
+                INSTAGRAM_WORDS.any { text.contains(" $it ") } -> Target.INSTAGRAM
+                MUSIC_WORDS.any { text.contains(" $it ") } -> Target.MUSIC
+                FLIPKART_WORDS.any { text.contains(" $it ") } -> Target.FLIPKART
+                BLINKIT_WORDS.any { text.contains(" $it ") } -> Target.BLINKIT
                 AMAZON_WORDS.any { text.contains(" $it ") } -> Target.AMAZON
-                SHOPPING_WORDS.any { text.contains(" $it ") } -> Target.AMAZON // Default shopping to Amazon if no platform named
+                SHOPPING_WORDS.any { text.contains(" $it ") } -> Target.AMAZON
                 else -> Target.UNKNOWN
             }
 
@@ -211,6 +243,8 @@ data class VoiceCommand(
             val query = if (isShopping) extractProduct(text)
             else if (target == Target.MUSIC) extractMusicQuery(spoken.trim())
             else null
+
+            val appName = if (target == Target.LAUNCH_APP) extractAppName(text) else null
 
             return VoiceCommand(
                 raw = spoken.trim(),
@@ -223,7 +257,8 @@ data class VoiceCommand(
                 tone = tone,
                 searchQuery = query,
                 time = if (target == Target.ALARM || target == Target.TIMER) extractTimeFallback(text) else null,
-                recipient = if (target == Target.CALL) extractRecipientFallback(text) else null
+                recipient = if (target == Target.CALL) extractRecipientFallback(text) else null,
+                appName = appName,
             )
         }
 

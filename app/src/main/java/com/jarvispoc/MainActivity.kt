@@ -306,6 +306,53 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
     }
 
     /**
+     * Dynamically finds and launches any installed app by name on the device.
+     */
+    fun launchAppByName(name: String) {
+        val pm = context.packageManager
+        val query = name.trim().lowercase()
+        AgentLog.info("Searching for installed app matching '$query'...")
+
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+
+        // Match priority: exact label -> startsWith -> contains -> packageName contains
+        val match = resolveInfos.firstOrNull { ri ->
+            val label = ri.loadLabel(pm).toString().lowercase()
+            label == query
+        } ?: resolveInfos.firstOrNull { ri ->
+            val label = ri.loadLabel(pm).toString().lowercase()
+            label.startsWith(query)
+        } ?: resolveInfos.firstOrNull { ri ->
+            val label = ri.loadLabel(pm).toString().lowercase()
+            label.contains(query)
+        } ?: resolveInfos.firstOrNull { ri ->
+            ri.activityInfo.packageName.lowercase().contains(query)
+        }
+
+        if (match != null) {
+            val pkg = match.activityInfo.packageName
+            val label = match.loadLabel(pm).toString()
+            val launchIntent = pm.getLaunchIntentForPackage(pkg)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { context.startActivity(launchIntent) }
+                    .onSuccess {
+                        AgentLog.success("Opened $label ($pkg)")
+                    }
+                    .onFailure {
+                        AgentLog.error("Could not launch $label", it)
+                    }
+                return
+            }
+        }
+
+        AgentLog.error("Could not find any installed app matching '$name'")
+    }
+
+    /**
      * System commands: Alarm, Timer, Music.
      */
     fun executeSystemCommand(cmd: VoiceCommand) {
@@ -514,8 +561,17 @@ private fun ControlPanel(captionEngine: CaptionEngine) {
                 startFlow(EcommerceOrderFlow(product, config), autoPlaceOrder)
                 return
             }
+            VoiceCommand.Target.LAUNCH_APP -> {
+                val appName = cmd.appName
+                if (appName.isNullOrBlank()) {
+                    AgentLog.error("Heard an open app request, but no app name was detected.")
+                    return
+                }
+                launchAppByName(appName)
+                return
+            }
             VoiceCommand.Target.UNKNOWN -> {
-                AgentLog.error("JARVIS: I'm not sure what you want me to do. Try saying 'Order [item]', 'Call [name]', 'Set alarm', or 'Play [song]'.")
+                AgentLog.error("JARVIS: I'm not sure what you want me to do. Try saying 'Open [app]', 'Order [item]', 'Call [name]', 'Set alarm', or 'Play [song]'.")
                 return
             }
             VoiceCommand.Target.INSTAGRAM -> Unit

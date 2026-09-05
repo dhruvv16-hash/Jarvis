@@ -98,4 +98,31 @@ class VoiceCommandTest {
         assertEquals(VoiceCommand.Target.AMAZON, cmd6.target)
         assertEquals("milk", cmd6.searchQuery)
     }
+
+    @Test
+    fun testDynamicAppLaunchParsing() {
+        val cmd1 = VoiceCommand.parse("Open WhatsApp")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd1.target)
+        assertEquals("whatsapp", cmd1.appName)
+
+        val cmd2 = VoiceCommand.parse("Launch YouTube")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd2.target)
+        assertEquals("youtube", cmd2.appName)
+
+        val cmd3 = VoiceCommand.parse("Open the Calculator app")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd3.target)
+        assertEquals("calculator", cmd3.appName)
+
+        val cmd4 = VoiceCommand.parse("Start Chrome")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd4.target)
+        assertEquals("chrome", cmd4.appName)
+
+        val cmd5 = VoiceCommand.parse("Open Settings")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd5.target)
+        assertEquals("settings", cmd5.appName)
+
+        val cmd6 = VoiceCommand.parse("Open Spotify")
+        assertEquals(VoiceCommand.Target.LAUNCH_APP, cmd6.target)
+        assertEquals("spotify", cmd6.appName)
+    }
 }
